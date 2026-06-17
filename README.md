@@ -1,31 +1,45 @@
-# Advanced Second Entry Pine Port
+# Advanced Second Entry
 
-This workspace contains a native TradingView Pine Script v5 port of the NinjaTrader 8 `AdvancedSecondEntry` indicator:
+Advanced Second Entry is a TradingView Pine Script v6 indicator from Price Action Tools built for discretionary price-action traders who want clean second-entry structure on the chart.
 
-- Source of truth: `/Users/laithsinawi/Projects/NT8/Indicators/AdvancedSecondEntry/AdvancedSecondEntry.cs`
-- Pine script: [`pine/AdvancedSecondEntry.pine`](/Users/laithsinawi/Projects/TradingView/AdvancedSecondEntryPine/pine/AdvancedSecondEntry.pine)
+It highlights alternating legs, reset conditions, and second-entry opportunities with 2EL and 2ES labels. Optional HL/LH confirmation markers and projection visuals help keep the setup readable without turning the chart into noise.
 
-## What was ported
+## Features
 
-- Alternating up/down leg tracking.
-- Reset detection for long and short counts.
-- Second-entry staging and 2EL / 2ES labeling.
-- Optional HL / LH confirmation markers.
-- Optional projection lines for entry, stop, and target.
-- User inputs for the main behavior and styling controls.
-- Text-only signal labels by default, with an option to hide stage-1 labels and show only 2EL / 2ES.
+- Alternating up and down leg tracking
+- Reset-on-equal-high/low logic
+- Second-entry labeling with `2EL` and `2ES`
+- Optional `HL` and `LH` confirmation markers
+- Optional projection lines for entry, stop, and target
+- Configurable break offset, label placement, and signal filters
+- Clean overlay display designed for live trading and review
 
-## What is different from NT8
+## What this Pine version does
 
-- TradingView Pine is bar-based here, so the NT8 intrabar/tick execution model is not reproduced exactly.
-- NT8-specific licensing, purchase UI, and add-on integration were intentionally omitted.
-- Pine cannot mirror NT8 drawing-object lifecycles perfectly, so some live-bar reposition behavior may differ.
-- The “Strict Signal Bars” filter is preserved conceptually, but live-bar timing can still differ slightly from NT8 because Pine does not expose the same tick-by-tick event stream.
-- TradingView's script author shown in the Indicators dialog comes from the publishing account, not from Pine source comments.
+- Ported from the NinjaTrader 8 Advanced Second Entry indicator logic
+- Built natively for TradingView Pine Script v6
+- Keeps the core second-entry workflow and chart readability
+- Uses TradingView-friendly visuals and inputs
+
+## Notes on TradingView
+
+- Pine is bar-based, so it does not reproduce NT8 intrabar/tick execution exactly
+- NT8 licensing and platform-specific UI were intentionally omitted
+- Drawing-object behavior can differ slightly from NT8 on live bars
+
+## Price Action Tools
+
+- Website: https://priceactiontools.com
+- Product page: https://priceactiontools.com/product/advanced-second-entry-indicator/
+
+## Usage
+
+1. Add the script to a price chart.
+2. Adjust the Behavior and Appearance inputs to match your workflow.
+3. Use `Only Show Second Entries` if you want a cleaner chart focused on `2EL` and `2ES`.
+4. Turn on `Show HL / LH Markers` if you want additional confirmation context.
 
 ## Notes
 
-- The script is overlayed on price bars.
-- The code prefers readability and modularity over forcing a brittle one-to-one translation of NT8 implementation details.
-- If labels look stale after updating the script, remove the old indicator from the chart and add the updated version again.
-- If you want a tighter visual match, the next step is usually to compare this port against a few representative charts and tune the offset and marker settings.
+- This script is intended for discretionary trading workflows.
+- For best results, compare the output against representative market sessions and tune offsets as needed.
