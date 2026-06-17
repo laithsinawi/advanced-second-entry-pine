@@ -1,0 +1,557 @@
+//@version=6
+indicator("Advanced Second Entry", overlay=true, max_labels_count=500, max_lines_count=500)
+
+// Advanced Second Entry v1.0.0
+// Company: Price Action Tools
+// Product: Advanced Second Entry
+// Website: https://priceactiontools.com
+// Documentation: https://priceactiontools.com
+// Port of the NinjaTrader 8 Advanced Second Entry indicator logic to native TradingView Pine Script v6.
+//
+// Purpose:
+// - Track alternating up/down legs.
+// - Detect reset conditions and count second-entry sequences.
+// - Mark 2EL / 2ES signals and optional HL / LH confirmations.
+//
+// Usage:
+// - Apply to a price chart.
+// - Tune Break Offset, label placement, and the visual toggles in the input panel.
+// - This is a bar-based Pine port. NT8 intrabar/tick behavior and its licensing UI are not reproduced.
+
+// -----------------------------------------------------------------------------
+// Inputs
+// -----------------------------------------------------------------------------
+groupBehavior = "Behavior"
+groupAppearance = "Appearance"
+groupProjection = "Projection"
+groupColors = "Colors"
+groupAlerts = "Alerts"
+
+onlyShowSecondEntries = input.bool(false, "Only Show Second Entries", group=groupBehavior)
+swapLabelPlacement = input.bool(false, "Swap Label Placement", group=groupBehavior)
+showProjectionLines = input.bool(false, "Show Projection Lines", group=groupBehavior)
+alertsEnabled = input.bool(false, "Alerts Enabled", group=groupBehavior)
+resetOnEqualHighLow = input.bool(true, "Reset On Equal High/Low", group=groupBehavior)
+strictSecondEntrySignalBars = input.bool(false, "Strict Signal Bars", group=groupBehavior)
+strictSignalBarZonePercent = input.float(33.33, "Strict Signal Zone (%)", minval=0.0, maxval=100.0, step=0.01, group=groupBehavior)
+breakOffsetTicks = input.float(1.0, "Break Offset (Ticks)", minval=0.0, maxval=20.0, step=0.25, group=groupBehavior)
+
+labelOffsetTicks = input.float(4.0, "Label Offset (Ticks)", minval=0.0, maxval=20.0, step=0.25, group=groupAppearance)
+showHigherLowLowerHigh = input.bool(true, "Show HL / LH Markers", group=groupAppearance)
+showSecondEntryExtremes = input.bool(false, "Show 2nd Entry Extremes", group=groupAppearance)
+targetTicks = input.int(8, "Target (Ticks)", minval=1, maxval=200, group=groupProjection)
+projectionBarsForward = input.int(6, "Projection Bars Forward", minval=1, maxval=100, group=groupProjection)
+labelBackgroundOpacity = input.int(70, "Label Background Opacity", minval=0, maxval=100, group=groupAppearance)
+
+longColor = input.color(color.rgb(34, 139, 34), "Long Color", group=groupColors)
+shortColor = input.color(color.rgb(178, 34, 34), "Short Color", group=groupColors)
+labelBackgroundColor = input.color(color.black, "Label Background", group=groupColors)
+entryLineColor = input.color(color.rgb(30, 144, 255), "Entry Line", group=groupColors)
+stopLineColor = input.color(color.red, "Stop Line", group=groupColors)
+targetLineColor = input.color(color.rgb(46, 139, 87), "Target Line", group=groupColors)
+
+alertSoundNote = input.string("Alert1.wav", "Alert Sound Note", group=groupAlerts, tooltip="TradingView does not expose NT8-style sound selection. This note is informational only.")
+
+// -----------------------------------------------------------------------------
+// Helpers
+// -----------------------------------------------------------------------------
+tick = syminfo.mintick
+breakOffset = math.max(0.0, breakOffsetTicks) * tick
+labelOffset = math.max(0.0, labelOffsetTicks) * tick
+strictZoneFraction = math.max(0.0, math.min(1.0, strictSignalBarZonePercent / 100.0))
+entryBg = color.new(labelBackgroundColor, math.max(0, math.min(100, labelBackgroundOpacity)))
+
+f_cmp(float a, float b) =>
+    na(a) or na(b) ? 0 : math.abs(a - b) <= tick * 0.1 ? 0 : a > b ? 1 : -1
+
+f_ge(float a, float b) =>
+    f_cmp(a, b) >= 0
+
+f_le(float a, float b) =>
+    f_cmp(a, b) <= 0
+
+f_norm_stage(int entryNumber) =>
+    entryNumber <= 0 ? entryNumber : entryNumber % 2 == 0 ? 2 : entryNumber
+
+f_current_entry_price(int direction) =>
+    if bar_index < 1
+        na
+    else
+        float entryOffset = math.max(1.0, breakOffsetTicks) * tick
+        direction == 1 ? high[1] + entryOffset : low[1] - entryOffset
+
+f_is_current_bar_reset(int direction, float pivotHigh, float pivotLow) =>
+    if direction == 1
+        na(pivotHigh) ? false : resetOnEqualHighLow ? f_ge(high, pivotHigh) : f_cmp(high, pivotHigh) > 0
+    else
+        na(pivotLow) ? false : resetOnEqualHighLow ? f_le(low, pivotLow) : f_cmp(low, pivotLow) < 0
+
+f_is_good_signal_bar(int direction) =>
+    if bar_index < 1
+        true
+    else
+        float barRange = high[1] - low[1]
+        if f_cmp(barRange, 0.0) == 0
+            false
+        else
+            float closePos = (close[1] - low[1]) / barRange
+            direction == 1 ? closePos >= 1.0 - strictZoneFraction : closePos <= strictZoneFraction
+
+f_entry_color(int direction) =>
+    direction == 1 ? longColor : shortColor
+
+f_delete_label(label handle) =>
+    if not na(handle)
+        label.delete(handle)
+
+f_delete_line(line handle) =>
+    if not na(handle)
+        line.delete(handle)
+
+f_upsert_projection_line(line handle, int x1, float y1, int x2, float y2, color c) =>
+    if na(handle)
+        line.new(x1=x1, y1=y1, x2=x2, y2=y2, xloc=xloc.bar_index, extend=extend.none, color=c, width=1)
+    else
+        line.set_xy1(handle, x1, y1)
+        line.set_xy2(handle, x2, y2)
+        line.set_color(handle, c)
+        handle
+
+// -----------------------------------------------------------------------------
+// State
+// -----------------------------------------------------------------------------
+var float pivotHigh = na
+var float pivotLow = na
+var float lastHigh = na
+var float lastLow = na
+var int legUp = 1
+var int legDown = 1
+var bool isUpLeg = true
+var bool isDownLeg = true
+var bool isResetLong = false
+var bool isResetShort = false
+var int lastBarLongBreak = -1
+var int lastBarShortBreak = -1
+var int lastSignalBar = na
+var int lastSignalDirection = 0
+var int lastSignalEntryNumber = 0
+
+var float pendingSecondEntryPrice = na
+var int pendingSecondEntryDirection = 0
+var int pendingSecondEntrySignalBar = na
+
+var int pendingConfirmationDirection = 0
+var int pendingConfirmationSecondEntryBar = na
+var float pendingConfirmationReferenceExtreme = na
+var float pendingConfirmationCountStartPrice = na
+var bool pendingConfirmationSawPullback = false
+var float pendingConfirmationExtreme = na
+var int pendingConfirmationExtremeBar = na
+
+var line pendingEntryLine = na
+var line pendingStopLine = na
+var line pendingTargetLine = na
+
+longSignalStagePlot = 0
+shortSignalStagePlot = 0
+
+f_draw_hl_lh_marker(int direction, int barsAgo) =>
+    markerText = direction == 1 ? "HL" : "LH"
+    markerOffset = (math.max(0.0, labelOffsetTicks) + 2.0) * tick
+    markerY = direction == 1 ? low[barsAgo] - markerOffset : high[barsAgo] + markerOffset
+    markerX = bar_index - barsAgo
+    label.new(x=markerX, y=markerY, xloc=xloc.bar_index, yloc=yloc.price, text=markerText, style=label.style_label_left, color=entryBg, textcolor=f_entry_color(direction), size=size.small)
+
+// -----------------------------------------------------------------------------
+// Reset / initialization
+// -----------------------------------------------------------------------------
+if barstate.isfirst
+    pivotHigh := high
+    pivotLow := low
+    lastHigh := high
+    lastLow := low
+
+// -----------------------------------------------------------------------------
+// Core state machine
+// -----------------------------------------------------------------------------
+if bar_index > 0
+    longSignalStagePlot := 0
+    shortSignalStagePlot := 0
+
+    // Reset flags derive from the current bar versus the prior count pivot.
+    effectiveLow = math.min(nz(lastLow, low), low)
+    effectiveHigh = math.max(nz(lastHigh, high), high)
+    isResetShort := resetOnEqualHighLow ? f_le(effectiveLow, nz(pivotLow, effectiveLow)) : f_cmp(effectiveLow, nz(pivotLow, effectiveLow)) < 0
+    isResetLong := resetOnEqualHighLow ? f_ge(effectiveHigh, nz(pivotHigh, effectiveHigh)) : f_cmp(effectiveHigh, nz(pivotHigh, effectiveHigh)) > 0
+
+    currentBarResetsLongCount = f_is_current_bar_reset(1, pivotHigh, pivotLow)
+    currentBarResetsShortCount = f_is_current_bar_reset(-1, pivotHigh, pivotLow)
+
+    if isDownLeg
+        pivotHigh := nz(lastHigh, high)
+        if f_ge(high, high[1] + breakOffset) and lastBarLongBreak != bar_index
+            lastBarLongBreak := bar_index
+            isDownLeg := false
+            isUpLeg := true
+
+            if isResetShort
+                pendingConfirmationDirection := 0
+                pendingConfirmationSecondEntryBar := na
+                pendingConfirmationReferenceExtreme := na
+                pendingConfirmationCountStartPrice := na
+                pendingConfirmationSawPullback := false
+                pendingConfirmationExtreme := na
+                pendingConfirmationExtremeBar := na
+                pivotLow := math.min(nz(lastLow, low), low)
+                legDown := 1
+            else
+                legDown += 1
+
+            longEntryNumber = legUp
+
+            if currentBarResetsLongCount
+                pendingConfirmationDirection := 0
+                pendingConfirmationSecondEntryBar := na
+                pendingConfirmationReferenceExtreme := na
+                pendingConfirmationCountStartPrice := na
+                pendingConfirmationSawPullback := false
+                pendingConfirmationExtreme := na
+                pendingConfirmationExtremeBar := na
+                pivotHigh := math.max(nz(lastHigh, high), high)
+                legUp := 1
+
+            // Finish any armed confirmation using the prior structure before recording the new signal.
+            if showHigherLowLowerHigh and pendingConfirmationDirection != 0
+                if pendingConfirmationDirection == 1
+                    if pendingConfirmationSawPullback and not na(pendingConfirmationExtremeBar) and bar_index > pendingConfirmationSecondEntryBar and bar_index == pendingConfirmationExtremeBar + 1 and f_cmp(high, high[math.max(1, bar_index - pendingConfirmationExtremeBar)] + math.max(1.0, breakOffsetTicks) * tick) >= 0
+                        if f_cmp(pendingConfirmationExtreme, pendingConfirmationReferenceExtreme) > 0
+                            barsAgo = bar_index - pendingConfirmationExtremeBar
+                            f_draw_hl_lh_marker(pendingConfirmationDirection, barsAgo)
+                        pendingConfirmationDirection := 0
+                        pendingConfirmationSecondEntryBar := na
+                        pendingConfirmationReferenceExtreme := na
+                        pendingConfirmationCountStartPrice := na
+                        pendingConfirmationSawPullback := false
+                        pendingConfirmationExtreme := na
+                        pendingConfirmationExtremeBar := na
+                else if pendingConfirmationDirection == -1
+                    if pendingConfirmationSawPullback and not na(pendingConfirmationExtremeBar) and bar_index > pendingConfirmationSecondEntryBar and bar_index == pendingConfirmationExtremeBar + 1 and f_cmp(low, low[math.max(1, bar_index - pendingConfirmationExtremeBar)] - math.max(1.0, breakOffsetTicks) * tick) <= 0
+                        if f_cmp(pendingConfirmationExtreme, pendingConfirmationReferenceExtreme) < 0
+                            barsAgo = bar_index - pendingConfirmationExtremeBar
+                            f_draw_hl_lh_marker(pendingConfirmationDirection, barsAgo)
+                        pendingConfirmationDirection := 0
+                        pendingConfirmationSecondEntryBar := na
+                        pendingConfirmationReferenceExtreme := na
+                        pendingConfirmationCountStartPrice := na
+                        pendingConfirmationSawPullback := false
+                        pendingConfirmationExtreme := na
+                        pendingConfirmationExtremeBar := na
+
+            entryStage = f_norm_stage(longEntryNumber)
+            if longEntryNumber >= 1
+                if not (strictSecondEntrySignalBars and entryStage == 2 and not f_is_good_signal_bar(1))
+                    if na(lastSignalBar) or bar_index != lastSignalBar or 1 != lastSignalDirection or entryStage != lastSignalEntryNumber
+                        longSignalStagePlot := entryStage
+                        lastSignalBar := bar_index
+                        lastSignalDirection := 1
+                        lastSignalEntryNumber := entryStage
+
+                        if alertsEnabled
+                            alert("Advanced Second Entry long #" + str.tostring(entryStage), alert.freq_once_per_bar_close)
+
+                        entryPrice = f_current_entry_price(1)
+                        if not na(entryPrice)
+                            pendingSecondEntryPrice := entryPrice
+                            pendingSecondEntryDirection := 1
+                            pendingSecondEntrySignalBar := bar_index
+
+                            if entryStage == 2 and showHigherLowLowerHigh
+                                pendingConfirmationDirection := 1
+                                pendingConfirmationSecondEntryBar := bar_index
+                                pendingConfirmationReferenceExtreme := lastLow
+                                pendingConfirmationCountStartPrice := pivotHigh
+                                pendingConfirmationSawPullback := false
+                                pendingConfirmationExtreme := na
+                                pendingConfirmationExtremeBar := na
+
+                            if showSecondEntryExtremes and not na(pivotHigh)
+                                label.new(x=bar_index, y=pivotHigh + (math.max(0.0, labelOffsetTicks) + 6.0) * tick, xloc=xloc.bar_index, yloc=yloc.price, text="2EL Start", style=label.style_label_left, color=entryBg, textcolor=f_entry_color(1), size=size.small)
+
+            lastHigh := high
+            lastLow := math.min(nz(lastLow, low), low)
+        else if f_cmp(high, lastHigh) > 0 and lastBarLongBreak == bar_index
+            lastHigh := high
+            isDownLeg := false
+            isUpLeg := true
+
+            if isResetShort
+                pendingConfirmationDirection := 0
+                pendingConfirmationSecondEntryBar := na
+                pendingConfirmationReferenceExtreme := na
+                pendingConfirmationCountStartPrice := na
+                pendingConfirmationSawPullback := false
+                pendingConfirmationExtreme := na
+                pendingConfirmationExtremeBar := na
+                pivotLow := math.min(nz(lastLow, low), low)
+                legDown := 1
+
+            if currentBarResetsLongCount
+                pendingConfirmationDirection := 0
+                pendingConfirmationSecondEntryBar := na
+                pendingConfirmationReferenceExtreme := na
+                pendingConfirmationCountStartPrice := na
+                pendingConfirmationSawPullback := false
+                pendingConfirmationExtreme := na
+                pendingConfirmationExtremeBar := na
+                pivotHigh := math.max(nz(lastHigh, high), high)
+                legUp := 1
+
+            lastLow := math.min(nz(lastLow, low), low)
+        else
+            lastLow := math.min(nz(lastLow, low), low)
+            if pendingConfirmationDirection != 0 and not na(pendingConfirmationSecondEntryBar) and bar_index > pendingConfirmationSecondEntryBar
+                if pendingConfirmationDirection == 1 and isDownLeg
+                    if currentBarResetsLongCount
+                        pendingConfirmationDirection := 0
+                        pendingConfirmationSecondEntryBar := na
+                        pendingConfirmationReferenceExtreme := na
+                        pendingConfirmationCountStartPrice := na
+                        pendingConfirmationSawPullback := false
+                        pendingConfirmationExtreme := na
+                        pendingConfirmationExtremeBar := na
+                    else if f_cmp(low, pendingConfirmationReferenceExtreme) > 0
+                        pendingConfirmationSawPullback := true
+                        pendingConfirmationExtreme := low
+                        pendingConfirmationExtremeBar := bar_index
+                    else
+                        pendingConfirmationDirection := 0
+                        pendingConfirmationSecondEntryBar := na
+                        pendingConfirmationReferenceExtreme := na
+                        pendingConfirmationCountStartPrice := na
+                        pendingConfirmationSawPullback := false
+                        pendingConfirmationExtreme := na
+                        pendingConfirmationExtremeBar := na
+                else if pendingConfirmationDirection == -1 and isUpLeg
+                    if f_cmp(high, pendingConfirmationReferenceExtreme) < 0
+                        pendingConfirmationSawPullback := true
+                        pendingConfirmationExtreme := high
+                        pendingConfirmationExtremeBar := bar_index
+                    else
+                        pendingConfirmationDirection := 0
+                        pendingConfirmationSecondEntryBar := na
+                        pendingConfirmationReferenceExtreme := na
+                        pendingConfirmationCountStartPrice := na
+                        pendingConfirmationSawPullback := false
+                        pendingConfirmationExtreme := na
+                        pendingConfirmationExtremeBar := na
+
+    else if isUpLeg
+        pivotLow := nz(lastLow, low)
+        if f_le(low, low[1] - breakOffset) and lastBarShortBreak != bar_index
+            lastBarShortBreak := bar_index
+            isUpLeg := false
+            isDownLeg := true
+
+            if isResetLong
+                pendingConfirmationDirection := 0
+                pendingConfirmationSecondEntryBar := na
+                pendingConfirmationReferenceExtreme := na
+                pendingConfirmationCountStartPrice := na
+                pendingConfirmationSawPullback := false
+                pendingConfirmationExtreme := na
+                pendingConfirmationExtremeBar := na
+                pivotHigh := math.max(nz(lastHigh, high), high)
+                legUp := 1
+            else
+                legUp += 1
+
+            shortEntryNumber = legDown
+
+            if currentBarResetsShortCount
+                pendingConfirmationDirection := 0
+                pendingConfirmationSecondEntryBar := na
+                pendingConfirmationReferenceExtreme := na
+                pendingConfirmationCountStartPrice := na
+                pendingConfirmationSawPullback := false
+                pendingConfirmationExtreme := na
+                pendingConfirmationExtremeBar := na
+                pivotLow := math.min(nz(lastLow, low), low)
+                legDown := 1
+
+            if showHigherLowLowerHigh and pendingConfirmationDirection != 0 and not na(pendingConfirmationSecondEntryBar)
+                if pendingConfirmationDirection == 1 and pendingConfirmationSawPullback and not na(pendingConfirmationExtremeBar)
+                    triggerBarsAgo = bar_index - pendingConfirmationExtremeBar
+                    if triggerBarsAgo == 1 and f_cmp(high, high[triggerBarsAgo] + math.max(1.0, breakOffsetTicks) * tick) >= 0
+                        if f_cmp(pendingConfirmationExtreme, pendingConfirmationReferenceExtreme) > 0
+                            f_draw_hl_lh_marker(pendingConfirmationDirection, triggerBarsAgo)
+                        pendingConfirmationDirection := 0
+                        pendingConfirmationSecondEntryBar := na
+                        pendingConfirmationReferenceExtreme := na
+                        pendingConfirmationCountStartPrice := na
+                        pendingConfirmationSawPullback := false
+                        pendingConfirmationExtreme := na
+                        pendingConfirmationExtremeBar := na
+                else if pendingConfirmationDirection == -1 and pendingConfirmationSawPullback and not na(pendingConfirmationExtremeBar)
+                    triggerBarsAgo = bar_index - pendingConfirmationExtremeBar
+                    if triggerBarsAgo == 1 and f_cmp(low, low[triggerBarsAgo] - math.max(1.0, breakOffsetTicks) * tick) <= 0
+                        if f_cmp(pendingConfirmationExtreme, pendingConfirmationReferenceExtreme) < 0
+                            f_draw_hl_lh_marker(pendingConfirmationDirection, triggerBarsAgo)
+                        pendingConfirmationDirection := 0
+                        pendingConfirmationSecondEntryBar := na
+                        pendingConfirmationReferenceExtreme := na
+                        pendingConfirmationCountStartPrice := na
+                        pendingConfirmationSawPullback := false
+                        pendingConfirmationExtreme := na
+                        pendingConfirmationExtremeBar := na
+
+            entryStage = f_norm_stage(shortEntryNumber)
+            if shortEntryNumber >= 1
+                if not (strictSecondEntrySignalBars and entryStage == 2 and not f_is_good_signal_bar(-1))
+                    if na(lastSignalBar) or bar_index != lastSignalBar or -1 != lastSignalDirection or entryStage != lastSignalEntryNumber
+                        shortSignalStagePlot := entryStage
+                        lastSignalBar := bar_index
+                        lastSignalDirection := -1
+                        lastSignalEntryNumber := entryStage
+
+                        if alertsEnabled
+                            alert("Advanced Second Entry short #" + str.tostring(entryStage), alert.freq_once_per_bar_close)
+
+                        entryPrice = f_current_entry_price(-1)
+                        if not na(entryPrice)
+                            pendingSecondEntryPrice := entryPrice
+                            pendingSecondEntryDirection := -1
+                            pendingSecondEntrySignalBar := bar_index
+
+                            if entryStage == 2 and showHigherLowLowerHigh
+                                pendingConfirmationDirection := -1
+                                pendingConfirmationSecondEntryBar := bar_index
+                                pendingConfirmationReferenceExtreme := lastHigh
+                                pendingConfirmationCountStartPrice := pivotLow
+                                pendingConfirmationSawPullback := false
+                                pendingConfirmationExtreme := na
+                                pendingConfirmationExtremeBar := na
+
+                            if showSecondEntryExtremes and not na(pivotLow)
+                                label.new(x=bar_index, y=pivotLow - (math.max(0.0, labelOffsetTicks) + 6.0) * tick, xloc=xloc.bar_index, yloc=yloc.price, text="2ES Start", style=label.style_label_left, color=entryBg, textcolor=f_entry_color(-1), size=size.small)
+
+            lastLow := low
+            lastHigh := math.max(nz(lastHigh, high), high)
+        else if f_cmp(low, lastLow) < 0 and lastBarShortBreak == bar_index
+            lastLow := low
+            isUpLeg := false
+            isDownLeg := true
+
+            if isResetLong
+                pendingConfirmationDirection := 0
+                pendingConfirmationSecondEntryBar := na
+                pendingConfirmationReferenceExtreme := na
+                pendingConfirmationCountStartPrice := na
+                pendingConfirmationSawPullback := false
+                pendingConfirmationExtreme := na
+                pendingConfirmationExtremeBar := na
+                pivotHigh := math.max(nz(lastHigh, high), high)
+                legUp := 1
+
+            if currentBarResetsShortCount
+                pendingConfirmationDirection := 0
+                pendingConfirmationSecondEntryBar := na
+                pendingConfirmationReferenceExtreme := na
+                pendingConfirmationCountStartPrice := na
+                pendingConfirmationSawPullback := false
+                pendingConfirmationExtreme := na
+                pendingConfirmationExtremeBar := na
+                pivotLow := math.min(nz(lastLow, low), low)
+                legDown := 1
+
+            lastHigh := math.max(nz(lastHigh, high), high)
+        else
+            lastHigh := math.max(nz(lastHigh, high), high)
+            if pendingConfirmationDirection != 0 and not na(pendingConfirmationSecondEntryBar) and bar_index > pendingConfirmationSecondEntryBar
+                if pendingConfirmationDirection == 1 and isDownLeg
+                    if f_cmp(low, pendingConfirmationReferenceExtreme) > 0
+                        pendingConfirmationSawPullback := true
+                        pendingConfirmationExtreme := low
+                        pendingConfirmationExtremeBar := bar_index
+                    else
+                        pendingConfirmationDirection := 0
+                        pendingConfirmationSecondEntryBar := na
+                        pendingConfirmationReferenceExtreme := na
+                        pendingConfirmationCountStartPrice := na
+                        pendingConfirmationSawPullback := false
+                        pendingConfirmationExtreme := na
+                        pendingConfirmationExtremeBar := na
+                else if pendingConfirmationDirection == -1 and isUpLeg
+                    if f_cmp(high, pendingConfirmationReferenceExtreme) < 0
+                        pendingConfirmationSawPullback := true
+                        pendingConfirmationExtreme := high
+                        pendingConfirmationExtremeBar := bar_index
+                    else
+                        pendingConfirmationDirection := 0
+                        pendingConfirmationSecondEntryBar := na
+                        pendingConfirmationReferenceExtreme := na
+                        pendingConfirmationCountStartPrice := na
+                        pendingConfirmationSawPullback := false
+                        pendingConfirmationExtreme := na
+                        pendingConfirmationExtremeBar := na
+
+    // Update the next second-entry candidate.
+    candidateDirection = 0
+    float candidatePrice = na
+    if isDownLeg
+        upcomingEntry = f_norm_stage(legUp)
+        if upcomingEntry == 2
+            candidateDirection := 1
+            candidatePrice := f_current_entry_price(1)
+    else if isUpLeg
+        upcomingEntry = f_norm_stage(legDown)
+        if upcomingEntry == 2
+            candidateDirection := -1
+            candidatePrice := f_current_entry_price(-1)
+
+    if candidateDirection != 0 and not na(candidatePrice)
+        if na(pendingSecondEntryPrice) or pendingSecondEntryDirection != candidateDirection or pendingSecondEntrySignalBar == bar_index
+            pendingSecondEntryPrice := candidatePrice
+            pendingSecondEntryDirection := candidateDirection
+            pendingSecondEntrySignalBar := bar_index
+
+    // Clear any pending entry once price touches the entry price.
+    if pendingSecondEntryDirection != 0 and not na(pendingSecondEntryPrice)
+        triggered = pendingSecondEntryDirection == 1 ? high >= pendingSecondEntryPrice : low <= pendingSecondEntryPrice
+        if triggered
+            pendingSecondEntryPrice := na
+            pendingSecondEntryDirection := 0
+            pendingSecondEntrySignalBar := na
+            f_delete_line(pendingEntryLine)
+            f_delete_line(pendingStopLine)
+            f_delete_line(pendingTargetLine)
+            pendingEntryLine := na
+            pendingStopLine := na
+            pendingTargetLine := na
+
+// Update projection lines for the active pending entry.
+if not showProjectionLines or pendingSecondEntryDirection == 0 or na(pendingSecondEntryPrice)
+    f_delete_line(pendingEntryLine)
+    f_delete_line(pendingStopLine)
+    f_delete_line(pendingTargetLine)
+    pendingEntryLine := na
+    pendingStopLine := na
+    pendingTargetLine := na
+else
+    signalBarsAgo = math.max(1, bar_index - pendingSecondEntrySignalBar)
+    signalHigh = high[signalBarsAgo]
+    signalLow = low[signalBarsAgo]
+    if not na(signalHigh) and not na(signalLow)
+        entryPrice = pendingSecondEntryDirection == 1 ? signalHigh + tick : signalLow - tick
+        stopPrice = pendingSecondEntryDirection == 1 ? signalLow - tick : signalHigh + tick
+        targetPrice = pendingSecondEntryDirection == 1 ? entryPrice + targetTicks * tick : entryPrice - targetTicks * tick
+        x1 = bar_index - signalBarsAgo
+        x2 = bar_index + math.max(1, projectionBarsForward)
+        pendingEntryLine := f_upsert_projection_line(pendingEntryLine, x1, entryPrice, x2, entryPrice, entryLineColor)
+        pendingStopLine := f_upsert_projection_line(pendingStopLine, x1, stopPrice, x2, stopPrice, stopLineColor)
+        pendingTargetLine := targetTicks > 0 ? f_upsert_projection_line(pendingTargetLine, x1, targetPrice, x2, targetPrice, targetLineColor) : pendingTargetLine
+
+// Entry shapes for the active signal bar.
+plotshape(longSignalStagePlot == 1 and not onlyShowSecondEntries, title="Advanced Second Entry Long 1", style=shape.labelup, location=location.belowbar, color=color.new(color.aqua, 15), text="1L", textcolor=color.white, size=size.tiny)
+plotshape(longSignalStagePlot == 2, title="Advanced Second Entry Long 2", style=shape.labelup, location=location.belowbar, color=color.new(color.green, 0), text="2EL", textcolor=color.white, size=size.small)
+plotshape(shortSignalStagePlot == 1 and not onlyShowSecondEntries, title="Advanced Second Entry Short 1", style=shape.labeldown, location=location.abovebar, color=color.new(color.orange, 15), text="1S", textcolor=color.white, size=size.tiny)
+plotshape(shortSignalStagePlot == 2, title="Advanced Second Entry Short 2", style=shape.labeldown, location=location.abovebar, color=color.new(color.red, 0), text="2ES", textcolor=color.white, size=size.small)
