@@ -42,10 +42,12 @@ showSecondEntryExtremes = input.bool(false, "Show 2nd Entry Extremes", group=gro
 targetTicks = input.int(8, "Target (Ticks)", minval=1, maxval=200, group=groupProjection)
 projectionBarsForward = input.int(6, "Projection Bars Forward", minval=1, maxval=100, group=groupProjection)
 labelBackgroundOpacity = input.int(70, "Label Background Opacity", minval=0, maxval=100, group=groupAppearance)
+hlLhBackgroundOpacity = input.int(25, "HL / LH Background Opacity", minval=0, maxval=100, group=groupAppearance)
 
 longColor = input.color(color.rgb(34, 139, 34), "Long Color", group=groupColors)
 shortColor = input.color(color.rgb(178, 34, 34), "Short Color", group=groupColors)
 labelBackgroundColor = input.color(color.black, "Label Background", group=groupColors)
+hlLhBackgroundColor = input.color(color.rgb(70, 70, 70), "HL / LH Background", group=groupColors)
 entryLineColor = input.color(color.rgb(30, 144, 255), "Entry Line", group=groupColors)
 stopLineColor = input.color(color.red, "Stop Line", group=groupColors)
 targetLineColor = input.color(color.rgb(46, 139, 87), "Target Line", group=groupColors)
@@ -60,6 +62,7 @@ breakOffset = math.max(0.0, breakOffsetTicks) * tick
 labelOffset = math.max(0.0, labelOffsetTicks) * tick
 strictZoneFraction = math.max(0.0, math.min(1.0, strictSignalBarZonePercent / 100.0))
 entryBg = color.new(labelBackgroundColor, math.max(0, math.min(100, labelBackgroundOpacity)))
+hlLhBg = color.new(hlLhBackgroundColor, math.max(0, math.min(100, hlLhBackgroundOpacity)))
 
 f_cmp(float a, float b) =>
     na(a) or na(b) ? 0 : math.abs(a - b) <= tick * 0.1 ? 0 : a > b ? 1 : -1
@@ -157,10 +160,19 @@ shortSignalStagePlot = 0
 
 f_draw_hl_lh_marker(int direction, int barsAgo) =>
     markerText = direction == 1 ? "HL" : "LH"
-    markerOffset = (math.max(0.0, labelOffsetTicks) + 2.0) * tick
+    markerOffset = math.max(tick * 0.5, labelOffset * 0.25)
     markerY = direction == 1 ? low[barsAgo] - markerOffset : high[barsAgo] + markerOffset
     markerX = bar_index - barsAgo
-    label.new(x=markerX, y=markerY, xloc=xloc.bar_index, yloc=yloc.price, text=markerText, style=label.style_label_left, color=entryBg, textcolor=f_entry_color(direction), size=size.small)
+    label.new(
+         x=markerX,
+         y=markerY,
+         xloc=xloc.bar_index,
+        yloc=yloc.price,
+        text=markerText,
+        style=direction == 1 ? label.style_label_up : label.style_label_down,
+        color=hlLhBg,
+        textcolor=color.white,
+        size=size.normal)
 
 // -----------------------------------------------------------------------------
 // Reset / initialization
