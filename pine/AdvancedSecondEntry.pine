@@ -15,7 +15,7 @@ indicator("Advanced Second Entry", overlay=true, max_labels_count=500, max_lines
 //
 // Usage:
 // - Apply to a price chart.
-// - Tune Break Offset, label placement, and the visual toggles in the input panel.
+// - Tune Break Offset and the visual toggles in the input panel.
 // - This is a bar-based Pine port. NT8 intrabar/tick behavior and its licensing UI are not reproduced.
 
 // -----------------------------------------------------------------------------
@@ -24,11 +24,11 @@ indicator("Advanced Second Entry", overlay=true, max_labels_count=500, max_lines
 groupBehavior = "Behavior"
 groupAppearance = "Appearance"
 groupProjection = "Projection"
+groupTrend = "Trend"
 groupColors = "Colors"
 groupAlerts = "Alerts"
 
 onlyShowSecondEntries = input.bool(false, "Only Show Second Entries", group=groupBehavior)
-swapLabelPlacement = input.bool(false, "Swap Label Placement", group=groupBehavior)
 showProjectionLines = input.bool(false, "Show Projection Lines", group=groupBehavior)
 alertsEnabled = input.bool(false, "Alerts Enabled", group=groupBehavior)
 resetOnEqualHighLow = input.bool(true, "Reset On Equal High/Low", group=groupBehavior)
@@ -38,16 +38,18 @@ breakOffsetTicks = input.float(1.0, "Break Offset (Ticks)", minval=0.0, maxval=2
 
 labelOffsetTicks = input.float(4.0, "Label Offset (Ticks)", minval=0.0, maxval=20.0, step=0.25, group=groupAppearance)
 showHigherLowLowerHigh = input.bool(true, "Show HL / LH Markers", group=groupAppearance)
-showSecondEntryExtremes = input.bool(false, "Show 2nd Entry Extremes", group=groupAppearance)
 targetTicks = input.int(8, "Target (Ticks)", minval=1, maxval=200, group=groupProjection)
 projectionBarsForward = input.int(6, "Projection Bars Forward", minval=1, maxval=100, group=groupProjection)
 labelBackgroundOpacity = input.int(70, "Label Background Opacity", minval=0, maxval=100, group=groupAppearance)
 hlLhBackgroundOpacity = input.int(25, "HL / LH Background Opacity", minval=0, maxval=100, group=groupAppearance)
+showEma = input.bool(true, "Show EMA", group=groupTrend)
+emaLength = input.int(20, "EMA Length", minval=1, maxval=200, group=groupTrend)
 
 longColor = input.color(color.rgb(34, 139, 34), "Long Color", group=groupColors)
 shortColor = input.color(color.rgb(178, 34, 34), "Short Color", group=groupColors)
 labelBackgroundColor = input.color(color.black, "Label Background", group=groupColors)
 hlLhBackgroundColor = input.color(color.rgb(70, 70, 70), "HL / LH Background", group=groupColors)
+emaColor = input.color(color.rgb(0, 128, 128), "EMA Color", group=groupColors)
 entryLineColor = input.color(color.rgb(30, 144, 255), "Entry Line", group=groupColors)
 stopLineColor = input.color(color.red, "Stop Line", group=groupColors)
 targetLineColor = input.color(color.rgb(46, 139, 87), "Target Line", group=groupColors)
@@ -286,9 +288,6 @@ if bar_index > 0
                                 pendingConfirmationExtreme := na
                                 pendingConfirmationExtremeBar := na
 
-                            if showSecondEntryExtremes and not na(pivotHigh)
-                                label.new(x=bar_index, y=pivotHigh + (math.max(0.0, labelOffsetTicks) + 6.0) * tick, xloc=xloc.bar_index, yloc=yloc.price, text="2EL Start", style=label.style_label_left, color=entryBg, textcolor=f_entry_color(1), size=size.small)
-
             lastHigh := high
             lastLow := math.min(nz(lastLow, low), low)
         else if f_cmp(high, lastHigh) > 0 and lastBarLongBreak == bar_index
@@ -443,9 +442,6 @@ if bar_index > 0
                                 pendingConfirmationExtreme := na
                                 pendingConfirmationExtremeBar := na
 
-                            if showSecondEntryExtremes and not na(pivotLow)
-                                label.new(x=bar_index, y=pivotLow - (math.max(0.0, labelOffsetTicks) + 6.0) * tick, xloc=xloc.bar_index, yloc=yloc.price, text="2ES Start", style=label.style_label_left, color=entryBg, textcolor=f_entry_color(-1), size=size.small)
-
             lastLow := low
             lastHigh := math.max(nz(lastHigh, high), high)
         else if f_cmp(low, lastLow) < 0 and lastBarShortBreak == bar_index
@@ -567,3 +563,6 @@ plotshape(longSignalStagePlot == 1 and not onlyShowSecondEntries, title="Advance
 plotshape(longSignalStagePlot == 2, title="Advanced Second Entry Long 2", style=shape.labelup, location=location.belowbar, color=color.new(color.green, 0), text="2EL", textcolor=color.white, size=size.small)
 plotshape(shortSignalStagePlot == 1 and not onlyShowSecondEntries, title="Advanced Second Entry Short 1", style=shape.labeldown, location=location.abovebar, color=color.new(color.orange, 15), text="1S", textcolor=color.white, size=size.tiny)
 plotshape(shortSignalStagePlot == 2, title="Advanced Second Entry Short 2", style=shape.labeldown, location=location.abovebar, color=color.new(color.red, 0), text="2ES", textcolor=color.white, size=size.small)
+
+emaValue = ta.ema(close, emaLength)
+plot(showEma ? emaValue : na, title="EMA", color=emaColor, linewidth=2)

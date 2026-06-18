@@ -11,7 +11,7 @@ It highlights alternating legs, reset conditions, and second-entry opportunities
 - Second-entry labeling with `2EL` and `2ES`
 - Optional `HL` and `LH` confirmation markers
 - Optional projection lines for entry, stop, and target
-- Configurable break offset, label placement, and signal filters
+- Configurable break offset, label spacing, and signal filters
 - Clean overlay display designed for live trading and review
 
 ## What this Pine version does
