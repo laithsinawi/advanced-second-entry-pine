@@ -29,6 +29,7 @@ groupColors = "Colors"
 groupAlerts = "Alerts"
 
 onlyShowSecondEntries = input.bool(false, "Only Show Second Entries", group=groupBehavior)
+swapLabelPlacement = input.bool(false, "Swap Label Placement", group=groupBehavior)
 showProjectionLines = input.bool(false, "Show Projection Lines", group=groupBehavior)
 alertsEnabled = input.bool(false, "Alerts Enabled", group=groupBehavior)
 resetOnEqualHighLow = input.bool(true, "Reset On Equal High/Low", group=groupBehavior)
@@ -559,10 +560,14 @@ else
         pendingTargetLine := targetTicks > 0 ? f_upsert_projection_line(pendingTargetLine, x1, targetPrice, x2, targetPrice, targetLineColor) : pendingTargetLine
 
 // Entry shapes for the active signal bar.
-plotshape(longSignalStagePlot == 1 and not onlyShowSecondEntries, title="Advanced Second Entry Long 1", style=shape.labelup, location=location.belowbar, color=color.new(color.aqua, 15), text="1L", textcolor=color.white, size=size.tiny)
-plotshape(longSignalStagePlot == 2, title="Advanced Second Entry Long 2", style=shape.labelup, location=location.belowbar, color=color.new(color.green, 0), text="2EL", textcolor=color.white, size=size.small)
-plotshape(shortSignalStagePlot == 1 and not onlyShowSecondEntries, title="Advanced Second Entry Short 1", style=shape.labeldown, location=location.abovebar, color=color.new(color.orange, 15), text="1S", textcolor=color.white, size=size.tiny)
-plotshape(shortSignalStagePlot == 2, title="Advanced Second Entry Short 2", style=shape.labeldown, location=location.abovebar, color=color.new(color.red, 0), text="2ES", textcolor=color.white, size=size.small)
+longLabelLocation = swapLabelPlacement ? location.abovebar : location.belowbar
+shortLabelLocation = swapLabelPlacement ? location.belowbar : location.abovebar
+longLabelStyle = swapLabelPlacement ? shape.labeldown : shape.labelup
+shortLabelStyle = swapLabelPlacement ? shape.labelup : shape.labeldown
+plotshape(longSignalStagePlot == 1 and not onlyShowSecondEntries, title="Advanced Second Entry Long 1", style=longLabelStyle, location=longLabelLocation, color=color.new(color.aqua, 15), text="1L", textcolor=color.white, size=size.tiny)
+plotshape(longSignalStagePlot == 2, title="Advanced Second Entry Long 2", style=longLabelStyle, location=longLabelLocation, color=color.new(color.green, 0), text="2EL", textcolor=color.white, size=size.small)
+plotshape(shortSignalStagePlot == 1 and not onlyShowSecondEntries, title="Advanced Second Entry Short 1", style=shortLabelStyle, location=shortLabelLocation, color=color.new(color.orange, 15), text="1S", textcolor=color.white, size=size.tiny)
+plotshape(shortSignalStagePlot == 2, title="Advanced Second Entry Short 2", style=shortLabelStyle, location=shortLabelLocation, color=color.new(color.red, 0), text="2ES", textcolor=color.white, size=size.small)
 
 emaValue = ta.ema(close, emaLength)
 plot(showEma ? emaValue : na, title="EMA", color=emaColor, linewidth=2)
